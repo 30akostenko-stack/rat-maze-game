@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixel Rat Maze — рисуй крысу и играй</title>
+  <style>
+    /* --- Общие стили --- */
+    :root{--bg:#05051a;--panel:#0b0f2a;--accent:#ffd84d;--muted:#9aa4b2}
+    html,body{height:100%;margin:0;font-family:Inter, Arial, sans-serif;background:var(--bg);color:#e6eef6}
+    /* Пиксельное ночное небо */
+    body::before{
+      content:'';position:fixed;inset:0;background:linear-gradient(180deg,#02021a 0%, #08102a 60%);
+      background-size:100% 100%;
+      z-index:-2;
+    }
+    /* звездочки — повторяющийся пиксельный паттерн */
+    body::after{
+      content:'';position:fixed;inset:0;z-index:-1;background-image:
+        radial-gradient(circle at 10% 20%, #fff 1px, transparent 1px),
+        radial-gradient(circle at 30% 40%, #fff 1px, transparent 1px),
+        radial-gradient(circle at 70% 15%, #fff 1px, transparent 1px),
+        radial-gradient(circle at 85% 60%, #fff 1px, transparent 1px),
+        radial-gradient(circle at 50% 80%, #fff 1px, transparent 1px);
+      background-size:7px 7px, 9px 9px, 6px 6px, 8px 8px, 10px 10px;
+      opacity:0.9;mix-blend-mode:screen;pointer-events:none;filter:contrast(140%);
+    }
+
+    .container{max-width:1180px;margin:28px auto;padding:18px;display:flex;gap:18px;align-items:flex-start}
+    .panel{background:rgba(255,255,255,0.03);border-radius:12px;padding:12px}
+    .left{width:380px}
+    .right{flex:1}
+
+    h1{font-size:16px;margin:6px 0}
+    p.small{color:var(--muted);font-size:13px;margin:6px 0}
+
+    /* Канва для рисования — пикселизированная */
+    .draw-wrap{background:#071022;padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:8px;align-items:center}
+    #drawCanvas{width:260px;height:260px;border:2px solid rgba(255,255,255,0.04);image-rendering:pixelated;cursor:crosshair}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    button{background:var(--accent);border:none;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:700}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+
+    /* Настройки */
+    .range{width:100%}
+    label{font-size:13px;color:var(--muted)}
+
+    /* Игра */
+    #gameCanvas{width:820px;height:820px;background:#071022;display:block;border-radius:8px;image-rendering:pixelated}
+
+    .hud{display:flex;gap:10px;margin-top:10px;align-items:center}
+    .stat{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;font-size:13px}
+
+    footer{color:var(--muted);font-size:13px;margin-top:10px}
+
+    /* Мобильные подстройки */
+    @media (max-width:980px){ .container{flex-direction:column;padding:10px} .left{width:100%} #gameCanvas{width:100%;height:70vh} }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel left">
+      <h1>1) Нарисуй пиксельную крысу</h1>
+      <div class="draw-wrap">
+        <canvas id="drawCanvas" width="32" height="32"></canvas>
+        <div class="controls">
+          <button id="brushBtn">Кисть</button>
+          <button id="eraserBtn" class="ghost">Ластик</button>
+          <button id="clearBtn" class="ghost">Очистить</button>
+        </div>
+        <div style="display:flex;gap:8px;width:100%;justify-content:space-between;align-items:center">
+          <label class="small">Размер холста: <strong>32×32</strong> (пикселей)</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <label class="small">Звук</label>
+            <input id="soundToggle" type="checkbox" checked />
+          </div>
+        </div>
+        <p class="small">Рисуй мышкой или пальцем. Цвет кисти — белый (контрастный). Нажми "Тест" чтобы посмотреть, как будет выглядеть спрайт.</p>
+        <div style="display:flex;gap:8px;width:100%;justify-content:space-between">
+          <button id="testBtn" class="ghost">Тест</button>
+          <button id="startBtn">Начать игру</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel right">
+      <h1>Игровое поле — пиксельный лабиринт</h1>
+      <canvas id="gameCanvas" width="512" height="512"></canvas>
+      <div class="hud">
+        <div class="stat">Сыры: <span id="totalCheese">0</span></div>
+        <div class="stat">Собрано: <span id="collected">0</span></div>
+        <div class="stat">Рука: <span id="status">Ожидание</span></div>
+        <div style="flex:1"></div>
+        <label class="small">Размер лабиринта</label>
+        <input id="sizeRange" type="range" min="11" max="41" step="2" value="21" class="range" style="width:180px" />
+      </div>
+      <footer>Управление: стрелки ← ↑ → ↓ или WASD. Если рука догонит — проигрыш.</footer>
+    </div>
+  </div>
+
+<script>
+// ------------------ Параметры ------------------
+const drawCanvas = document.getElementById('drawCanvas');
+const dctx = drawCanvas.getContext('2d');
+const gameCanvas = document.getElementById('gameCanvas');
+const gctx = gameCanvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const testBtn = document.getElementById('testBtn');
+const clearBtn = document.getElementById('clearBtn');
+const brushBtn = document.getElementById('brushBtn');
+const eraserBtn = document.getElementById('eraserBtn');
+const sizeRange = document.getElementById('sizeRange');
+const totalCheeseEl = document.getElementById('totalCheese');
+const collectedEl = document.getElementById('collected');
+const statusEl = document.getElementById('status');
+const soundToggle = document.getElementById('soundToggle');
+
+let mazeSize = parseInt(sizeRange.value);
+let maze = [];
+let cell = 0;
+let player = {x:1,y:1};
+let hand = {x:1,y:1};
+let cheeses = [];
+let totalCheese = 0;
+let collected = 0;
+let tickInterval = null;
+let enemySpeed = 3;
+
+// ------------------ Звуки (WebAudio) ------------------
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playBeep(freq, time=0.08, type='sine'){
+  if(!soundToggle.checked) return;
+  const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+  o.start(); g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.12, audioCtx.currentTime+0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+time);
+  o.stop(audioCtx.currentTime+time+0.02);
+}
+function playCollect(){ playBeep(880,0.08,'square'); }
+function playCaught(){ playBeep(120,0.25,'sawtooth'); }
+
+// ------------------ Рисование пикселя крысы ------------------
+// маленький холст 32x32 — мы рисуем на нём, но масштабируем для предпросмотра
+const PIX = drawCanvas.width; // 32
+let drawing = false;
+let tool = 'brush';
+
+function resetDraw(){ dctx.fillStyle = '#000000'; dctx.fillRect(0,0,PIX,PIX); dctx.fillStyle = '#ffffff'; }
+resetDraw();
+
+// рисуем квадратными пикселями — размер кисти 1
+drawCanvas.addEventListener('pointerdown', e=>{ drawing=true; paintAt(e); });
+drawCanvas.addEventListener('pointermove', e=>{ if(drawing) paintAt(e); });
+window.addEventListener('pointerup', ()=> drawing=false );
+
+function paintAt(e){ const r = drawCanvas.getBoundingClientRect(); const x = Math.floor((e.clientX - r.left) / (r.width / PIX)); const y = Math.floor((e.clientY - r.top) / (r.height / PIX)); if(x<0||y<0||x>=PIX||y>=PIX) return; if(tool==='brush'){ dctx.fillStyle='#ffffff'; dctx.fillRect(x,y,1,1); } else { dctx.fillStyle='#000000'; dctx.fillRect(x,y,1,1); } drawPreview(); }
+
+brushBtn.onclick = ()=>{ tool='brush'; brushBtn.classList.remove('ghost'); eraserBtn.classList.add('ghost'); }
+eraserBtn.onclick = ()=>{ tool='eraser'; eraserBtn.classList.remove('ghost'); brushBtn.classList.add('ghost'); }
+clearBtn.onclick = ()=>{ resetDraw(); drawPreview(); }
+
+// предпросмотр: покажем увеличенное изображение в новом окне при тесте
+function makeSprite(size){ // size — in pixels (display size)
+  const off = document.createElement('canvas'); off.width = PIX; off.height = PIX; const octx = off.getContext('2d');
+  // copy drawing
+  octx.drawImage(drawCanvas,0,0);
+  // create image scaled
+  const out = document.createElement('canvas'); out.width = size; out.height = size; const actx=out.getContext('2d');
+  actx.imageSmoothingEnabled = false; actx.drawImage(off,0,0,size,size);
+  const img = new Image(); img.src = out.toDataURL(); return img;
+}
+
+function drawPreview(){ // optional: draw preview in corner of draw canvas (we'll scale up on hover)
+  // to keep simple, do nothing here — test button opens preview
+}
+
+testBtn.onclick = ()=>{
+  const img = makeSprite(160);
+  const w = window.open('', '_blank', 'noopener'); if(!w) { alert('Разреши всплывающие окна'); return; }
+  w.document.body.style.background='#02021a'; w.document.body.style.display='flex'; w.document.body.style.alignItems='center'; w.document.body.style.justifyContent='center';
+  const i = w.document.createElement('img'); i.src=img.src; i.style.imageRendering='pixelated'; i.style.width='320px'; i.style.height='320px'; i.style.border='6px solid #08102a'; i.style.borderRadius='12px'; w.document.body.appendChild(i);
+}
+
+// ------------------ Лабиринт (DFS) ------------------
+function generateMaze(n){ const w=n,h=n; const m=Array.from({length:h},()=>Array(w).fill(1)); function inB(x,y){ return x>0 && x<w-1 && y>0 && y<h-1; }
+  function carve(x,y){ m[y][x]=0; const dirs=[[2,0],[-2,0],[0,2],[0,-2]]; shuffle(dirs); for(const d of dirs){ const nx=x+d[0], ny=y+d[1]; if(inB(nx,ny) && m[ny][nx]===1){ m[y + d[1]/2][x + d[0]/2]=0; carve(nx,ny); } } }
+  carve(1,1); // ensure exit
+  m[h-2][w-1]=0; return m; }
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+
+function placeCheese(m,count){ const spots=[]; for(let y=1;y<m.length-1;y++){ for(let x=1;x<m[0].length-1;x++){ if(m[y][x]===0 && !(x===1&&y===1)) spots.push({x,y}); }} shuffle(spots); return spots.slice(0,count);} 
+
+// ------------------ Pathfinding (BFS) ------------------
+function findPath(m,start,goal){ const h=m.length,w=m[0].length; const q=[start]; const prev=Array.from({length:h},()=>Array(w).fill(null)); const vis=Array.from({length:h},()=>Array(w).fill(false)); vis[start.y][start.x]=true; while(q.length){ const cur=q.shift(); if(cur.x===goal.x && cur.y===goal.y) break; const dirs=[{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}]; for(const d of dirs){ const nx=cur.x+d.x, ny=cur.y+d.y; if(ny>=0 && ny<h && nx>=0 && nx<w && !vis[ny][nx] && m[ny][nx]===0){ vis[ny][nx]=true; prev[ny][nx]=cur; q.push({x:nx,y:ny}); } } } if(!prev[goal.y][goal.x]) return null; const path=[]; let cur=goal; while(!(cur.x===start.x && cur.y===start.y)){ path.push(cur); cur=prev[cur.y][cur.x]; } path.reverse(); return path; }
+
+// ------------------ Рисование игрового поля ------------------
+function drawGame(){ gctx.clearRect(0,0,gameCanvas.width,gameCanvas.height); gctx.fillStyle='#001226'; gctx.fillRect(0,0,gameCanvas.width,gameCanvas.height); cell = Math.floor(gameCanvas.width / mazeSize); const ox = Math.floor((gameCanvas.width - cell*mazeSize)/2); const oy = ox;
+  // maze tiles
+  for(let y=0;y<mazeSize;y++){ for(let x=0;x<mazeSize;x++){ const px = ox + x*cell, py = oy + y*cell; if(maze[y][x]===1){ gctx.fillStyle='#0b1730'; gctx.fillRect(px,py,cell,cell); } else { gctx.fillStyle='#081826'; gctx.fillRect(px,py,cell,cell); gctx.fillStyle='rgba(255,255,255,0.02)'; gctx.fillRect(px+1,py+1,cell-2,cell-2); } } }
+  // cheeses
+  for(const c of cheeses){ const cx = ox + c.x*cell + Math.floor(cell/2); const cy = oy + c.y*cell + Math.floor(cell/2); drawCheese(cx,cy,Math.max(4,Math.floor(cell*0.35))); }
+  // player sprite (pixelated)
+  if(player.sprite){ const sw = Math.floor(cell*0.8); gctx.imageSmoothingEnabled = false; gctx.drawImage(player.sprite, ox + player.x*cell + Math.floor((cell-sw)/2), oy + player.y*cell + Math.floor((cell-sw)/2), sw, sw); }
+  else { gctx.fillStyle='#ffd86b'; gctx.fillRect(ox + player.x*cell + 2, oy + player.y*cell + 2, cell-4, cell-4); }
+  // hand (simple pixel hand)
+  drawHand(ox + hand.x*cell + Math.floor(cell/2), oy + hand.y*cell + Math.floor(cell/2), Math.floor(cell*0.8));
+}
+
+function drawCheese(x,y,size){ gctx.save(); gctx.translate(x,y); gctx.fillStyle='#ffd25b'; gctx.fillRect(-size/2,-size/2,size,size*0.6); gctx.fillStyle='#e6b84d'; gctx.fillRect(-size/8,-size/4,size/4,size/6); gctx.restore(); }
+
+function drawHand(x,y,size){ gctx.save(); gctx.translate(x,y); gctx.fillStyle='#f3d9d9'; const s = Math.max(4,Math.floor(size/6)); // draw pixelish hand as 3x3 rectangle cluster
+  const ps = s; const offs = [-ps,0,ps]; for(let i=0;i<3;i++){ for(let j=0;j<2;j++){ gctx.fillRect(-ps + i*ps, -ps + j*ps, ps-1, ps-1); } } gctx.restore(); }
+
+// ------------------ Игровая логика ------------------
+function startGame(){ mazeSize = parseInt(sizeRange.value); maze = generateMaze(mazeSize); player = {x:1,y:1, sprite: makeSprite(Math.max(16,Math.floor(cell*0.8)))}; hand = {x:mazeSize-2,y:mazeSize-2}; totalCheese = Math.max(3, Math.floor((mazeSize*mazeSize)/80)); cheeses = placeCheese(maze, totalCheese); collected = 0; totalCheeseEl.textContent = totalCheese; collectedEl.textContent = collected; statusEl.textContent = 'В игре'; if(tickInterval) clearInterval(tickInterval); enemySpeed = 3; tickInterval = setInterval(tick, 140); drawGame(); }
+
+function tick(){ // enemy move
+  const path = findPath(maze, hand, player);
+  if(path && path.length>0){ // move a few steps depending on speed
+    const step = 1; hand.x = path[0].x; hand.y = path[0].y; }
+  // check collect
+  for(let i=0;i<cheeses.length;i++){ const c=cheeses[i]; if(c.x===player.x && c.y===player.y){ cheeses.splice(i,1); collected++; collectedEl.textContent = collected; playCollect(); break; } }
+  if(collected>=totalCheese){ statusEl.textContent='Победа!'; clearInterval(tickInterval); tickInterval=null; }
+  if(hand.x===player.x && hand.y===player.y){ statusEl.textContent='Поймали!'; playCaught(); clearInterval(tickInterval); tickInterval=null; }
+  drawGame(); }
+
+// controls
+window.addEventListener('keydown', e=>{ if(!tickInterval) return; let dx=0, dy=0; if(e.key==='ArrowUp' || e.key==='w' || e.key==='W') dy=-1; if(e.key==='ArrowDown' || e.key==='s' || e.key==='S') dy=1; if(e.key==='ArrowLeft' || e.key==='a' || e.key==='A') dx=-1; if(e.key==='ArrowRight' || e.key==='d' || e.key==='D') dx=1; if(dx===0 && dy===0) return; const nx = player.x + dx, ny = player.y + dy; if(nx>=0 && nx<mazeSize && ny>=0 && ny<mazeSize && maze[ny][nx]===0){ player.x=nx; player.y=ny; drawGame(); } });
+
+// ------------------ Утилиты ------------------
+function makeSprite(size){ const off = document.createElement('canvas'); off.width = PIX; off.height = PIX; const oc = off.getContext('2d'); oc.imageSmoothingEnabled = false; oc.drawImage(drawCanvas,0,0); const out = document.createElement('canvas'); out.width = size; out.height = size; const a = out.getContext('2d'); a.imageSmoothingEnabled = false; a.drawImage(off,0,0,size,size); const img = new Image(); img.src = out.toDataURL(); return img; }
+
+// init
+sizeRange.oninput = ()=>{/*label*/}; startBtn.onclick = ()=>{ startGame(); };
+
+// initial draw
+resetDraw(); drawGame();
+
+</script>
+</body>
+</html>
